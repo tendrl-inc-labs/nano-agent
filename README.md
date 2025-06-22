@@ -27,7 +27,6 @@ For licensing questions, contact: `support@tendrl.com`
 
 See the [LICENSE](LICENSE.md) file for complete terms and restrictions.
 
-
 ## Features
 
 - Cross-platform UNIX socket communication (Windows 10 1803+, Linux, macOS)
@@ -35,7 +34,6 @@ See the [LICENSE](LICENSE.md) file for complete terms and restrictions.
 - Automatic resource monitoring (CPU, Memory, Queue load)
 - Configurable batch sizes and intervals
 - Graceful shutdown handling
-- Offline message persistence
 - Secure socket permissions
 
 ## AF_UNIX Socket Requirements
