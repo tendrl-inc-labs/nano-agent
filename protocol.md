@@ -239,5 +239,3 @@ Common errors include:
 | Environment Variable | Description |
 |---------------------|-------------|
 | `TENDRL_KEY` | API key for authentication |
-| `TENDRL_APP_URL` | Custom API endpoint |
-| `TENDRL_SOCKET_PATH` | Custom Unix socket path |

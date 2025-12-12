@@ -50,9 +50,17 @@ type Message struct {
 	Context     MessageContext `json:"context,omitempty"`
 	MsgType     string         `json:"msg_type,omitempty"`
 	Destination string         `json:"dest,omitempty"`
+	Source      string         `json:"source,omitempty"` // Used when receiving messages from check_messages
 	Timestamp   string         `json:"timestamp,omitempty"`
 }
 
+type CheckMessage struct {
+	Data      string   `json:"data,omitempty"` //omitempty to allow check_msg with no data
+	Tags      []string `json:"tags,omitempty"`
+	MsgType   string   `json:"msg_type,omitempty"`
+	Source    string   `json:"source,omitempty"`
+	Timestamp string   `json:"timestamp,omitempty"`
+}
 type ResponseMessage struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
@@ -390,7 +398,7 @@ func isWindowsAFUnixSupported() bool {
 	return true
 }
 
-func checkMessage(client *http.Client, limit int) ([]Message, error) {
+func checkMessage(client *http.Client, limit int) ([]CheckMessage, error) {
 	url := fmt.Sprintf("%s/entities/check_messages?limit=%d", config.AppURL, limit)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -423,7 +431,17 @@ func checkMessage(client *http.Client, limit int) ([]Message, error) {
 		return nil, err
 	}
 
-	return response.Messages, nil
+	var checkMessages []CheckMessage
+	for _, message := range response.Messages {
+		checkMessages = append(checkMessages, CheckMessage{
+			Data:      message.Data,
+			Tags:      message.Context.Tags,
+			MsgType:   message.MsgType,
+			Source:    message.Source,
+			Timestamp: message.Timestamp,
+		})
+	}
+	return checkMessages, nil
 }
 
 func sendSingleMessage(msg Message) interface{} {

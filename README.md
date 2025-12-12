@@ -51,6 +51,64 @@ See the [LICENSE](LICENSE.md) file for complete terms and restrictions.
 
 ## Installation
 
+### Quick Start (Recommended)
+
+Download the latest pre-built binary for your platform from the [GitHub releases page](https://github.com/tendrl-inc/clients/nano_agent/releases):
+
+#### Linux (x86_64)
+```bash
+# Download and install
+curl -L -o tendrl-agent https://github.com/tendrl-inc/clients/nano_agent/releases/latest/download/tendrl-agent-linux-amd64
+chmod +x tendrl-agent
+sudo mv tendrl-agent /usr/local/bin/
+
+# Create required directories and permissions
+sudo mkdir -p /var/lib/tendrl
+sudo groupadd tendrl
+sudo chown :tendrl /var/lib/tendrl
+sudo chmod 770 /var/lib/tendrl
+```
+
+#### Linux (ARM64)
+```bash
+curl -L -o tendrl-agent https://github.com/tendrl-inc/clients/nano_agent/releases/latest/download/tendrl-agent-linux-arm64
+chmod +x tendrl-agent
+sudo mv tendrl-agent /usr/local/bin/
+```
+
+#### macOS (Intel)
+```bash
+curl -L -o tendrl-agent https://github.com/tendrl-inc/clients/nano_agent/releases/latest/download/tendrl-agent-darwin-amd64
+chmod +x tendrl-agent
+sudo mv tendrl-agent /usr/local/bin/
+```
+
+#### macOS (Apple Silicon)
+```bash
+curl -L -o tendrl-agent https://github.com/tendrl-inc/clients/nano_agent/releases/latest/download/tendrl-agent-darwin-arm64
+chmod +x tendrl-agent
+sudo mv tendrl-agent /usr/local/bin/
+```
+
+#### Windows (x86_64)
+```powershell
+# Download using PowerShell
+Invoke-WebRequest -Uri "https://github.com/tendrl-inc/clients/nano_agent/releases/latest/download/tendrl-agent-windows-amd64.exe" -OutFile "tendrl-agent.exe"
+
+# Create required directories
+mkdir "C:\ProgramData\tendrl"
+```
+
+### Manual Installation (From Source)
+
+If you prefer to build from source, you'll need Go 1.23+ installed:
+
+```bash
+git clone https://github.com/tendrl-inc/clients/nano_agent.git
+cd nano_agent
+go build -o tendrl-agent .
+```
+
 ### Windows (10 1803+)
 
 ```bash
