@@ -136,32 +136,35 @@ sudo chmod 770 /var/lib/tendrl
 ```bash
 ./tendrl-agent \
   -apiKey=YOUR_API_KEY \
+  -appURL=https://app.tendrl.com/api \
   -minBatchSize=10 \
-  -maxBatchSize=500 \
+  -maxBatchSize=200 \
   -targetCPU=70.0 \
   -targetMem=80.0 \
   -flushInterval=250ms \
-  -maxQueue=10000
+  -maxQueue=1000
 ```
 
 ### Environment Variables
 
 ```bash
-export TENDRL_API_KEY=your_api_key
+export TENDRL_KEY=your_api_key
+export TENDRL_APP_URL=https://app.tendrl.com/api  # optional
 ./tendrl-agent
 ```
 
 ### Configuration Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| apiKey | string | - | API key for authentication |
-| minBatchSize | int | 10 | Minimum messages per batch |
-| maxBatchSize | int | 500 | Maximum messages per batch |
-| targetCPU | float | 70.0 | Target CPU usage percentage |
-| targetMem | float | 80.0 | Target memory usage percentage |
-| flushInterval | duration | 250ms | Maximum time between flushes |
-| maxQueue | int | 10000 | Maximum messages in queue |
+| Option         | Type     | Default                        | Description                       |
+| -------------- | -------- | ------------------------------ | --------------------------------- |
+| apiKey         | string   | -                              | API key (env: `TENDRL_KEY`)       |
+| appURL         | string   | `https://app.tendrl.com/api`   | API base URL (env: `TENDRL_APP_URL`) |
+| minBatchSize   | int      | 10                             | Minimum messages per batch        |
+| maxBatchSize   | int      | 200                            | Maximum messages per batch        |
+| targetCPU      | float    | 70.0                           | Target CPU usage percentage       |
+| targetMem      | float    | 80.0                           | Target memory usage percentage    |
+| flushInterval  | duration | 250ms                          | Maximum time between flushes      |
+| maxQueue       | int      | 1000                           | Maximum messages in queue         |
 
 ## Message Format
 
@@ -172,20 +175,28 @@ For complete protocol specification and detailed documentation, see [`protocol.m
 ```json
 {
   "msg_type": "publish",
-  "data": "your message data",
-  "tags": ["tag1", "tag2"],
+  "data": {
+    "key": "value"
+  },
   "context": {
+    "tags": ["tag1", "tag2"],
     "wait": false,
     "entity": "optional-entity-id"
-  }
+  },
+  "dest": "optional-destination-entity"
 }
 ```
 
+The `data` field accepts either a JSON object or a string.
+
 ### Message Types
 
-- `publish`: Standard message publishing
+- `publish`: Standard message publishing (with optional destination)
 - `msg_check`: Check for incoming messages
-- `dest_publish`: Publish to specific destination
+- `heartbeat`: Send system metrics (mem_free, mem_total, disk_free, disk_size)
+- `state_new`: Create a new state entry for the entity
+- `state_update`: Update an existing state entry
+- `state_read`: Read the entity's current state table
 
 ## Usage Examples
 
@@ -196,14 +207,14 @@ For complete protocol specification and detailed documentation, see [`protocol.m
 **Unix/Linux/macOS:**
 
 ```bash
-echo '{"msg_type": "publish", "data": "test", "tags": ["test"]}' | \
+echo '{"msg_type": "publish", "data": {"temperature": 22.5}, "context": {"tags": ["sensor"]}}' | \
   nc -U /var/lib/tendrl/tendrl_agent.sock
 ```
 
 **Windows:**
 
 ```powershell
-echo '{"msg_type": "publish", "data": "test", "tags": ["test"]}' | `
+echo '{"msg_type": "publish", "data": {"temperature": 22.5}, "context": {"tags": ["sensor"]}}' | `
   nc -U "C:\ProgramData\tendrl\tendrl_agent.sock"
 ```
 
@@ -212,14 +223,14 @@ echo '{"msg_type": "publish", "data": "test", "tags": ["test"]}' | `
 **Unix/Linux/macOS:**
 
 ```bash
-echo '{"msg_type": "publish", "data": "test", "context": {"wait": true}}' | \
+echo '{"msg_type": "publish", "data": {"status": "ok"}, "context": {"wait": true}}' | \
   nc -U /var/lib/tendrl/tendrl_agent.sock
 ```
 
 **Windows:**
 
 ```powershell
-echo '{"msg_type": "publish", "data": "test", "context": {"wait": true}}' | `
+echo '{"msg_type": "publish", "data": {"status": "ok"}, "context": {"wait": true}}' | `
   nc -U "C:\ProgramData\tendrl\tendrl_agent.sock"
 ```
 
@@ -248,7 +259,7 @@ After=network.target
 
 [Service]
 Type=simple
-Environment=TENDRL_API_KEY=your_api_key
+Environment=TENDRL_KEY=your_api_key
 ExecStart=/usr/local/bin/tendrl-agent
 Restart=always
 User=tendrl
@@ -263,7 +274,7 @@ WantedBy=multi-user.target
 ```powershell
 # Install as Windows service using NSSM or similar
 nssm install TendrlAgent "C:\Program Files\Tendrl\tendrl-agent.exe"
-nssm set TendrlAgent Environment "TENDRL_API_KEY=your_api_key"
+nssm set TendrlAgent Environment "TENDRL_KEY=your_api_key"
 nssm start TendrlAgent
 ```
 

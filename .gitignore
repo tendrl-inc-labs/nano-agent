@@ -1,2 +1,8 @@
 .DS_Store
 scripts/
+
+# Build artifacts
+agent
+tendrl-agent
+tendrl-agent-*
+*.exe

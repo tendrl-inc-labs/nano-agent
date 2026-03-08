@@ -1,5 +1,8 @@
 .PHONY: build build-all clean test release help
 
+VERSION := $(shell cat VERSION | tr -d '[:space:]')
+LDFLAGS := -s -w -X main.version=$(VERSION)
+
 # Default target
 help:
 	@echo "Available targets:"
@@ -16,15 +19,15 @@ help:
 
 # Build for current platform
 build:
-	go build -ldflags="-s -w" -o tendrl-agent .
+	go build -ldflags="$(LDFLAGS)" -o tendrl-agent .
 
 # Build for all platforms
 build-all: clean
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o tendrl-agent-linux-amd64 .
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o tendrl-agent-linux-arm64 .
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o tendrl-agent-windows-amd64.exe .
-	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o tendrl-agent-darwin-amd64 .
-	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o tendrl-agent-darwin-arm64 .
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-agent-linux-amd64 .
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-agent-linux-arm64 .
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-agent-windows-amd64.exe .
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-agent-darwin-amd64 .
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-agent-darwin-arm64 .
 
 # Clean build artifacts
 clean:
@@ -41,4 +44,4 @@ release:
 		exit 1; \
 	fi
 	@echo "Creating release v$(VERSION)..."
-	@./scripts/release.sh $(VERSION) 
+	@./scripts/release.sh $(VERSION)

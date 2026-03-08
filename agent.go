@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,12 +15,16 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/mem"
 )
+
+// version is set at build time via ldflags
+var version = "dev"
 
 type Config struct {
 	AppURL           string
@@ -39,27 +44,27 @@ type Config struct {
 }
 
 type MessageContext struct {
-	Tags         []string    `json:"tags,omitempty"`
-	Limit        interface{} `json:"-"`
-	WaitResponse bool        `json:"wait,omitempty"`
-	Entity       string      `json:"entity,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+	Limit        *int     `json:"limit,omitempty"`
+	WaitResponse bool     `json:"wait,omitempty"`
+	Entity       string   `json:"entity,omitempty"`
 }
 
 type Message struct {
-	Data        string         `json:"data,omitempty"` //omitempty to allow check_msg with no data
-	Context     MessageContext `json:"context,omitempty"`
-	MsgType     string         `json:"msg_type,omitempty"`
-	Destination string         `json:"dest,omitempty"`
-	Source      string         `json:"source,omitempty"` // Used when receiving messages from check_messages
-	Timestamp   string         `json:"timestamp,omitempty"`
+	Data        json.RawMessage `json:"data,omitempty"` // Accepts string or object, forwarded as-is
+	Context     MessageContext  `json:"context,omitempty"`
+	MsgType     string          `json:"msg_type,omitempty"`
+	Destination string          `json:"dest,omitempty"`
+	Source      string          `json:"source,omitempty"` // Used when receiving messages from check_messages
+	Timestamp   string          `json:"timestamp,omitempty"`
 }
 
 type CheckMessage struct {
-	Data      string   `json:"data,omitempty"` //omitempty to allow check_msg with no data
-	Tags      []string `json:"tags,omitempty"`
-	MsgType   string   `json:"msg_type,omitempty"`
-	Source    string   `json:"source,omitempty"`
-	Timestamp string   `json:"timestamp,omitempty"`
+	Data      json.RawMessage `json:"data,omitempty"` // Accepts string or object
+	Tags      []string        `json:"tags,omitempty"`
+	MsgType   string          `json:"msg_type,omitempty"`
+	Source    string          `json:"source,omitempty"`
+	Timestamp string          `json:"timestamp,omitempty"`
 }
 type ResponseMessage struct {
 	Status  string `json:"status"`
@@ -72,15 +77,22 @@ type SystemMetrics struct {
 	QueueLoad   float64 // Current queue size / max queue size
 }
 
+// maxResponseBody limits HTTP response reads to 10MB to prevent memory exhaustion
+const maxResponseBody = 10 << 20
+
 var (
 	config       Config
 	client       *http.Client
 	messageQueue chan Message
-	done         = make(chan struct{})
+	cancel       context.CancelFunc
+	ctx          context.Context
+	wg           sync.WaitGroup
 )
 
 func InitializeConfig() {
+	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.StringVar(&config.ApiKey, "apiKey", "", "API key for authentication")
+	flag.StringVar(&config.AppURL, "appURL", "", "API base URL (default: https://app.tendrl.com/api)")
 	flag.DurationVar(&config.FlushInterval, "flushInterval", 250*time.Millisecond, "Flush interval for batching")
 	flag.IntVar(&config.BatchSize, "batchSize", 10, "Batch size for processing")
 	flag.IntVar(&config.MinBatchSize, "minBatchSize", 10, "Minimum batch size")
@@ -93,6 +105,13 @@ func InitializeConfig() {
 	flag.DurationVar(&config.MaxBatchInterval, "maxInterval", 1*time.Second, "Maximum batch interval")
 	flag.Parse()
 
+	if *showVersion {
+		fmt.Printf("tendrl-agent v%s\n", version)
+		os.Exit(0)
+	}
+
+	fmt.Printf("Tendrl Nano Agent v%s\n", version)
+
 	if config.ApiKey == "" {
 		config.ApiKey = os.Getenv("TENDRL_KEY")
 		if config.ApiKey == "" {
@@ -101,7 +120,12 @@ func InitializeConfig() {
 		}
 	}
 
-	config.AppURL = "https://app.tendrl.com/api"
+	if config.AppURL == "" {
+		config.AppURL = os.Getenv("TENDRL_APP_URL")
+		if config.AppURL == "" {
+			config.AppURL = "https://app.tendrl.com/api"
+		}
+	}
 
 	// Set platform-appropriate defaults for Unix socket paths
 	if runtime.GOOS == "windows" {
@@ -123,7 +147,11 @@ func ValidateClientContext(ctx *MessageContext) error {
 }
 
 func HandleConnection(conn net.Conn) {
+	defer wg.Done()
 	defer conn.Close()
+
+	// Set an initial read deadline to prevent hung connections
+	conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 	decoder := json.NewDecoder(bufio.NewReader(conn))
 
 	for {
@@ -132,9 +160,16 @@ func HandleConnection(conn net.Conn) {
 			fmt.Println("Connection closed by client")
 			break
 		} else if err != nil {
+			// Check if shutdown was requested
+			if ctx.Err() != nil {
+				break
+			}
 			fmt.Printf("Error decoding JSON message: %v\n", err)
 			continue
 		}
+
+		// Reset deadline after each successful read
+		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 
 		err := ValidateClientContext(&msg.Context)
 		if err != nil {
@@ -155,13 +190,8 @@ func ProcessMessage(conn net.Conn, msg Message) {
 	switch msg.MsgType {
 	case "msg_check":
 		limit := 1
-		var ok bool
-		if msg.Context.Limit != nil {
-			limit, ok = msg.Context.Limit.(int)
-			if !ok {
-				sendErrorResponse(conn, "Invalid limit type")
-				return
-			}
+		if msg.Context.Limit != nil && *msg.Context.Limit > 0 {
+			limit = *msg.Context.Limit
 		}
 
 		messages, err := checkMessage(client, limit)
@@ -177,7 +207,22 @@ func ProcessMessage(conn net.Conn, msg Message) {
 		response, _ := json.Marshal(messages)
 		conn.Write(response)
 
-	case "publish":
+	case "state_read":
+		result, err := readStateTable(client)
+		if err != nil {
+			sendErrorResponse(conn, err.Error())
+			return
+		}
+		response, _ := json.Marshal(result)
+		conn.Write(response)
+
+	case "heartbeat":
+		// Heartbeats always go directly to the single-message endpoint
+		resp := sendSingleMessage(msg)
+		response, _ := json.Marshal(resp)
+		conn.Write(response)
+
+	case "publish", "state_new", "state_update":
 		if msg.Context.WaitResponse {
 			resp := sendSingleMessage(msg)
 			response, _ := json.Marshal(resp)
@@ -185,7 +230,12 @@ func ProcessMessage(conn net.Conn, msg Message) {
 			return
 		}
 
-		messageQueue <- msg
+		select {
+		case messageQueue <- msg:
+			// Queued successfully
+		default:
+			sendErrorResponse(conn, "Queue full, try again later")
+		}
 
 	default:
 		sendErrorResponse(conn, "Unknown message type")
@@ -239,6 +289,7 @@ func calculateDynamicBatchSize(metrics SystemMetrics) int {
 func ProcessQueue() {
 	batch := make([]Message, 0, config.MaxBatchSize)
 	ticker := time.NewTicker(config.MinBatchInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -270,16 +321,19 @@ func ProcessQueue() {
 				batch = batch[:0]
 			}
 
-		case <-done:
-			close(messageQueue) // Prevent further writes
-			for msg := range messageQueue {
-				batch = append(batch, msg)
+		case <-ctx.Done():
+			// Drain remaining queued messages before exit
+			for {
+				select {
+				case msg := <-messageQueue:
+					batch = append(batch, msg)
+				default:
+					if len(batch) > 0 {
+						FlushBatch(batch)
+					}
+					return
+				}
 			}
-			if len(batch) > 0 {
-				FlushBatch(batch)
-			}
-			ticker.Stop()
-			return
 		}
 	}
 }
@@ -292,25 +346,56 @@ func FlushBatch(batch []Message) {
 	}
 
 	fmt.Printf("Flushing batch with %d messages...\n", len(batch))
-	req, err := http.NewRequest("POST", config.AppURL+"/messages", bytes.NewBuffer(payload))
-	if err != nil {
-		fmt.Printf("Error creating request: %v\n", err)
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+config.ApiKey)
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Printf("Error sending batch: %v\n", err)
-		return
-	}
-	defer resp.Body.Close()
+	maxRetries := 3
+	backoff := 500 * time.Millisecond
 
-	if resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			fmt.Printf("Retry attempt %d/%d after %v...\n", attempt, maxRetries-1, backoff)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				fmt.Printf("Shutdown requested, dropping batch of %d messages\n", len(batch))
+				return
+			}
+			backoff *= 2
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", config.AppURL+"/entities/messages", bytes.NewReader(payload))
+		if err != nil {
+			fmt.Printf("Error creating request: %v\n", err)
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+config.ApiKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return // Shutdown requested, don't log as error
+			}
+			fmt.Printf("Error sending batch: %v\n", err)
+			continue
+		}
+
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusCreated {
+			return // Success
+		}
+
+		// Don't retry client errors (4xx) — only server/network errors
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			fmt.Printf("Failed to send batch, status: %d, body: %s\n", resp.StatusCode, string(body))
+			return
+		}
+
 		fmt.Printf("Failed to send batch, status: %d, body: %s\n", resp.StatusCode, string(body))
 	}
+
+	fmt.Printf("Batch of %d messages dropped after %d retries\n", len(batch), maxRetries)
 }
 
 func sendErrorResponse(conn net.Conn, errorMsg string) {
@@ -325,13 +410,24 @@ func sendErrorResponse(conn net.Conn, errorMsg string) {
 func main() {
 	InitializeConfig()
 
+	// Initialize context for coordinated shutdown
+	ctx, cancel = context.WithCancel(context.Background())
+	defer cancel()
+
 	// Initialize message queue with configured size
 	messageQueue = make(chan Message, config.MaxQueueSize)
 
-	CreateDirs(config.LinuxPath)
+	if err := CreateDirs(config.LinuxPath); err != nil {
+		fmt.Printf("Warning: directory setup issue: %v\n", err)
+	}
 
 	client = &http.Client{
 		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        10,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     30 * time.Second,
+		},
 	}
 
 	// On Windows, check if AF_UNIX is supported
@@ -366,8 +462,8 @@ func main() {
 	signal.Notify(signalChannel, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-signalChannel
-		close(done)
 		fmt.Println("[main] Shutting down gracefully...")
+		cancel()
 		listener.Close()
 	}()
 
@@ -375,13 +471,16 @@ func main() {
 		conn, err := listener.Accept()
 		if err != nil {
 			select {
-			case <-done:
+			case <-ctx.Done():
+				// Wait for in-flight connections to finish
+				wg.Wait()
 				return
 			default:
 				fmt.Printf("[main] Accept error: %v\n", err)
 				continue
 			}
 		}
+		wg.Add(1)
 		go HandleConnection(conn)
 	}
 }
@@ -401,12 +500,12 @@ func isWindowsAFUnixSupported() bool {
 func checkMessage(client *http.Client, limit int) ([]CheckMessage, error) {
 	url := fmt.Sprintf("%s/entities/check_messages?limit=%d", config.AppURL, limit)
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", config.ApiKey))
+	req.Header.Set("Authorization", "Bearer "+config.ApiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
@@ -427,11 +526,11 @@ func checkMessage(client *http.Client, limit int) ([]CheckMessage, error) {
 	var response struct {
 		Messages []Message `json:"messages"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBody)).Decode(&response); err != nil {
 		return nil, err
 	}
 
-	var checkMessages []CheckMessage
+	checkMessages := make([]CheckMessage, 0, len(response.Messages))
 	for _, message := range response.Messages {
 		checkMessages = append(checkMessages, CheckMessage{
 			Data:      message.Data,
@@ -450,12 +549,12 @@ func sendSingleMessage(msg Message) interface{} {
 		return map[string]string{"error": err.Error()}
 	}
 
-	req, err := http.NewRequest("POST", config.AppURL+"/entities/message", bytes.NewBuffer(payload))
+	req, err := http.NewRequestWithContext(ctx, "POST", config.AppURL+"/entities/message", bytes.NewReader(payload))
 	if err != nil {
 		return map[string]string{"error": err.Error()}
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", config.ApiKey))
+	req.Header.Set("Authorization", "Bearer "+config.ApiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
@@ -465,6 +564,32 @@ func sendSingleMessage(msg Message) interface{} {
 	defer resp.Body.Close()
 
 	var result interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
+	json.NewDecoder(io.LimitReader(resp.Body, maxResponseBody)).Decode(&result)
 	return result
+}
+
+func readStateTable(client *http.Client) (interface{}, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", config.AppURL+"/entities/status-table", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Authorization", "Bearer "+config.ApiKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result interface{}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBody)).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
