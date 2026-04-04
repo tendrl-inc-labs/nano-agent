@@ -1,7 +1,7 @@
 # Tendrl Nano Agent
 
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/tendrl-inc/clients/nano_agent)
-[![Go Version](https://img.shields.io/badge/go-1.21+-00ADD8.svg)](https://golang.org/doc/devel/release.html)
+[![Go Version](https://img.shields.io/badge/go-1.26+-00ADD8.svg)](https://golang.org/doc/devel/release.html)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 
 A lightweight, resource-efficient agent for the Tendrl messaging system written in Go.
@@ -49,6 +49,15 @@ See the [LICENSE](LICENSE.md) file for complete terms and restrictions.
 
 - Native AF_UNIX support (all modern versions)
 
+### The `tendrl` group and socket access
+
+The agent runs on **Windows, Linux, and macOS**. Access to the socket (and thus who can send/receive messages) is restricted by group membership on all platforms.
+
+**Unix/Linux (and macOS if using the same socket path):** The **`tendrl` group** is required for socket security. The agent runs as user/group `tendrl`, and the socket directory (`/var/lib/tendrl`) and socket file are owned by that group with restricted permissions (e.g. `770` for the directory, `660` for the socket). Only **root** or users in the **`tendrl` group** can connect. Add application users with: `sudo usermod -aG tendrl your-app-user`. Creating the group and setting these permissions during installation is mandatory for correct and secure operation.
+
+**Windows:** The same idea is enforced using a **local group** named **`tendrl`** and a directory ACL. On first run, the agent creates the group (if missing) and sets the ACL on `C:\ProgramData\tendrl` so that only the **`tendrl`** group has access. Only members of that group (and administrators) can use the socket. Add application or service accounts to the group so they can connect:  
+`net localgroup tendrl YourUser /add` (run in an elevated prompt). The service account running the agent should also be in **`tendrl`** so it can create and use the socket.
+
 ## Installation
 
 ### Quick Start (Recommended)
@@ -95,7 +104,7 @@ sudo mv tendrl-agent /usr/local/bin/
 # Download using PowerShell
 Invoke-WebRequest -Uri "https://github.com/tendrl-inc/clients/nano_agent/releases/latest/download/tendrl-agent-windows-amd64.exe" -OutFile "tendrl-agent.exe"
 
-# Create required directories
+# Create required directory (or let the agent create it on first run; it will also create the "tendrl" local group and set ACL so only that group can access the socket)
 mkdir "C:\ProgramData\tendrl"
 ```
 
@@ -326,21 +335,32 @@ winver
 
 2. Socket Permission Denied
 
-```powershell
-# Check directory permissions
-icacls "C:\ProgramData\tendrl"
+Only the **`tendrl`** local group (and administrators) have access to `C:\ProgramData\tendrl`. Add the user or service account that needs to connect:
 
-# Ensure write access to socket directory
+```powershell
+# Run in an elevated (Administrator) prompt
+net localgroup tendrl YourUser /add
+```
+
+Then check that the directory ACL includes the tendrl group:
+
+```powershell
+icacls "C:\ProgramData\tendrl"
 ```
 
 ### Unix/Linux Issues
 
 1. Permission Denied
 
+The socket is only accessible to root and members of the **`tendrl` group** (see [The `tendrl` group and socket access](#the-tendrl-group-and-socket-access)). Ensure the socket and directory are owned by `tendrl` and add your application user to the group if it needs to connect:
+
 ```bash
-# Fix socket permissions
+# Fix socket ownership
 sudo chown :tendrl /var/lib/tendrl/tendrl_agent.sock
 sudo chmod 660 /var/lib/tendrl/tendrl_agent.sock
+
+# Allow your app user to use the socket
+sudo usermod -aG tendrl your-app-user
 ```
 
 2. Connection Refused
