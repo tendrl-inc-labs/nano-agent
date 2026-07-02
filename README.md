@@ -107,7 +107,10 @@ If you prefer to build from source, you'll need Go 1.23+ installed:
 git clone https://github.com/tendrl-inc/clients/nano_agent.git
 cd nano_agent
 go build -o tendrl-agent .
+go build -o tendrl ./cmd/tendrl
 ```
+
+Pre-built `tendrl` client binaries are published on the [releases page](https://github.com/tendrl-inc/clients/nano_agent/releases) alongside `tendrl-agent` (e.g. `tendrl-linux-amd64`, `tendrl-darwin-arm64`).
 
 ### Windows (10 1803+)
 
@@ -198,9 +201,74 @@ The `data` field accepts either a JSON object or a string.
 - `state_update`: Update an existing state entry
 - `state_read`: Read the entity's current state table
 
+## CLI Client (`tendrl`)
+
+The repo ships two binaries:
+
+| Binary | Role |
+|--------|------|
+| `tendrl-agent` | Long-running daemon that owns the API key and listens on the Unix socket |
+| `tendrl` | Thin socket client for debugging, scripting, and manual tests |
+
+The `tendrl` client does not need an API key. It talks to a running agent over the local socket only.
+
+### Install
+
+Download the matching `tendrl-*` binary from the [releases page](https://github.com/tendrl-inc/clients/nano_agent/releases), or build from source:
+
+```bash
+go build -o tendrl ./cmd/tendrl
+```
+
+### Commands
+
+```bash
+tendrl ping                                          # verify socket is reachable
+tendrl publish -data '{"temperature": 22.5}' -tags sensor
+tendrl publish -data '{"status": "ok"}' -wait        # wait for server response
+tendrl check -limit 10                               # poll for incoming messages
+tendrl heartbeat -data '{"mem_free": 1024}'          # send heartbeat payload
+tendrl state read                                    # read entity state table
+tendrl state new -data '{"firmware": "1.2.0"}'
+tendrl state update -data '{"mode": "standby"}'
+```
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-socket` | platform default (see [protocol.md](protocol.md)) | Override agent socket path |
+| `-version` | — | Print version and exit |
+
+Command-specific flags:
+
+| Command | Flags |
+|---------|-------|
+| `publish` | `-data` (JSON or `@file.json`), `-tags` (comma-separated), `-dest`, `-entity`, `-wait` |
+| `check` | `-limit` (default 1) |
+| `heartbeat` | `-data` (JSON or `@file.json`; defaults to `{}`) |
+| `state new`, `state update` | `-data` (required), `-wait` |
+
+JSON responses are pretty-printed to stdout. Agent errors are printed to stderr and the process exits with code 1.
+
+For the underlying socket protocol, see [`protocol.md`](protocol.md).
+
 ## Usage Examples
 
-### All Platforms (AF_UNIX Socket)
+### Using the `tendrl` CLI (Recommended)
+
+```bash
+# Publish sensor data
+tendrl publish -data '{"temperature": 22.5}' -tags sensor
+
+# Wait for server acknowledgment
+tendrl publish -data '{"status": "ok"}' -wait
+
+# Check for incoming commands
+tendrl check -limit 5
+```
+
+### Raw Socket (Any Language)
 
 1. Send a simple message:
 

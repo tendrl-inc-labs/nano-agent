@@ -35,6 +35,11 @@ jobs:
             tendrl-agent-windows-amd64.exe
             tendrl-agent-darwin-amd64
             tendrl-agent-darwin-arm64
+            tendrl-linux-amd64
+            tendrl-linux-arm64
+            tendrl-windows-amd64.exe
+            tendrl-darwin-amd64
+            tendrl-darwin-arm64
 
   release:
     needs: build
@@ -72,3 +77,8 @@ jobs:
             tendrl-agent-windows-amd64.exe
             tendrl-agent-darwin-amd64
             tendrl-agent-darwin-arm64
+            tendrl-linux-amd64
+            tendrl-linux-arm64
+            tendrl-windows-amd64.exe
+            tendrl-darwin-amd64
+            tendrl-darwin-arm64

@@ -20,6 +20,7 @@ help:
 # Build for current platform
 build:
 	go build -ldflags="$(LDFLAGS)" -o tendrl-agent .
+	go build -ldflags="$(LDFLAGS)" -o tendrl ./cmd/tendrl
 
 # Build for all platforms
 build-all: clean
@@ -28,10 +29,15 @@ build-all: clean
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-agent-windows-amd64.exe .
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-agent-darwin-amd64 .
 	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-agent-darwin-arm64 .
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-linux-amd64 ./cmd/tendrl
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-linux-arm64 ./cmd/tendrl
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-windows-amd64.exe ./cmd/tendrl
+	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-darwin-amd64 ./cmd/tendrl
+	GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o tendrl-darwin-arm64 ./cmd/tendrl
 
 # Clean build artifacts
 clean:
-	rm -f tendrl-agent tendrl-agent-*
+	rm -f tendrl-agent tendrl-agent-* tendrl tendrl-*
 
 # Run tests
 test:

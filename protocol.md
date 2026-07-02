@@ -208,6 +208,37 @@ Error responses are JSON objects with the following structure:
 
 ## Usage Examples
 
+### CLI Client
+
+The `tendrl` binary wraps the socket protocol for shell scripts and manual testing. It ships alongside `tendrl-agent` and does not require an API key.
+
+```bash
+# Verify the agent is listening
+tendrl ping
+
+# Publish data
+tendrl publish -data '{"temperature": 22.5, "unit": "celsius"}' -tags sensor,building-a
+
+# Publish and wait for a server response
+tendrl publish -data '{"temperature": 22.5}' -wait
+
+# Send to a specific entity
+tendrl publish -data '{"command": "reboot"}' -dest control-panel-01
+
+# Poll for incoming messages
+tendrl check -limit 5
+
+# State table operations
+tendrl state new -data '{"firmware": "1.2.0", "mode": "active"}'
+tendrl state update -data '{"mode": "standby"}'
+tendrl state read
+
+# Send a heartbeat
+tendrl heartbeat -data '{"mem_free": 1024.0, "mem_total": 4096.0}'
+```
+
+Use `-data @payload.json` to load JSON from a file. Override the socket path with `-socket` if needed.
+
 ### Connecting to the Socket (Unix/Linux)
 
 ```python
