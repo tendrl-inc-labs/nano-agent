@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -87,12 +88,19 @@ var (
 	cancel       context.CancelFunc
 	ctx          context.Context
 	wg           sync.WaitGroup
+
+	// Message accounting, visible in logs — silent drops are unacceptable.
+	statReceived  uint64 // messages successfully decoded off the socket
+	statParseErrs uint64 // socket payloads that failed to decode
+	statForwarded uint64 // messages accepted by the server
+	statFailed    uint64 // messages dropped after send failures
 )
 
 func InitializeConfig() {
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.StringVar(&config.ApiKey, "apiKey", "", "API key for authentication")
 	flag.StringVar(&config.AppURL, "appURL", "", "API base URL (default: https://app.tendrl.com/api)")
+	flag.StringVar(&config.SocketPath, "socket", "", "Unix socket path (default: platform system path; also TENDRL_SOCKET env)")
 	flag.DurationVar(&config.FlushInterval, "flushInterval", 250*time.Millisecond, "Flush interval for batching")
 	flag.IntVar(&config.BatchSize, "batchSize", 10, "Batch size for processing")
 	flag.IntVar(&config.MinBatchSize, "minBatchSize", 10, "Minimum batch size")
@@ -127,8 +135,15 @@ func InitializeConfig() {
 		}
 	}
 
-	// Set platform-appropriate defaults for Unix socket paths
-	if runtime.GOOS == "windows" {
+	// Set platform-appropriate defaults for Unix socket paths, unless the user
+	// overrode the path (-socket / TENDRL_SOCKET) — the system defaults need
+	// root to create, which blocks local/dev use entirely.
+	if config.SocketPath == "" {
+		config.SocketPath = os.Getenv("TENDRL_SOCKET")
+	}
+	if config.SocketPath != "" {
+		fmt.Printf("Using AF_UNIX socket at %s (user override)\n", config.SocketPath)
+	} else if runtime.GOOS == "windows" {
 		config.LinuxPath = "C:\\ProgramData\\tendrl"
 		config.SocketPath = config.LinuxPath + "\\tendrl_agent.sock"
 		fmt.Printf("Windows detected: Using AF_UNIX socket at %s\n", config.SocketPath)
@@ -164,9 +179,15 @@ func HandleConnection(conn net.Conn) {
 			if ctx.Err() != nil {
 				break
 			}
-			fmt.Printf("Error decoding JSON message: %v\n", err)
-			continue
+			// A json.Decoder does not recover after an error — the stream
+			// position is unknown, so continuing would spin on the same
+			// error forever. Drop the connection instead.
+			atomic.AddUint64(&statParseErrs, 1)
+			fmt.Printf("Error decoding JSON message (closing connection): %v\n", err)
+			break
 		}
+
+		atomic.AddUint64(&statReceived, 1)
 
 		// Reset deadline after each successful read
 		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
@@ -183,8 +204,9 @@ func HandleConnection(conn net.Conn) {
 }
 
 func ProcessMessage(conn net.Conn, msg Message) {
-	if len(msg.Context.Tags) > 0 {
-		fmt.Printf("Processing message with tags: %v\n", msg.Context.Tags)
+	// Log every ingest except msg_check (clients poll it every few seconds)
+	if msg.MsgType != "msg_check" {
+		fmt.Printf("Received %s message (tags: %v, wait: %v)\n", msg.MsgType, msg.Context.Tags, msg.Context.WaitResponse)
 	}
 
 	switch msg.MsgType {
@@ -234,6 +256,8 @@ func ProcessMessage(conn net.Conn, msg Message) {
 		case messageQueue <- msg:
 			// Queued successfully
 		default:
+			atomic.AddUint64(&statFailed, 1)
+			fmt.Println("Queue full, rejecting message")
 			sendErrorResponse(conn, "Queue full, try again later")
 		}
 
@@ -382,19 +406,27 @@ func FlushBatch(batch []Message) {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody))
 		resp.Body.Close()
 
-		if resp.StatusCode == http.StatusCreated {
+		// Contact returns 200 with {"code":200,"content":[ids]}; treat any 2xx
+		// as success — requiring exactly 201 made every good batch retry 3x
+		// (duplicating messages server-side) and then log as dropped.
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			atomic.AddUint64(&statForwarded, uint64(len(batch)))
+			fmt.Printf("Batch of %d messages forwarded (totals: received=%d forwarded=%d failed=%d)\n",
+				len(batch), atomic.LoadUint64(&statReceived), atomic.LoadUint64(&statForwarded), atomic.LoadUint64(&statFailed))
 			return // Success
 		}
 
 		// Don't retry client errors (4xx) — only server/network errors
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			fmt.Printf("Failed to send batch, status: %d, body: %s\n", resp.StatusCode, string(body))
+			atomic.AddUint64(&statFailed, uint64(len(batch)))
+			fmt.Printf("Batch of %d messages dropped, status: %d, body: %s\n", len(batch), resp.StatusCode, string(body))
 			return
 		}
 
 		fmt.Printf("Failed to send batch, status: %d, body: %s\n", resp.StatusCode, string(body))
 	}
 
+	atomic.AddUint64(&statFailed, uint64(len(batch)))
 	fmt.Printf("Batch of %d messages dropped after %d retries\n", len(batch), maxRetries)
 }
 
@@ -417,8 +449,12 @@ func main() {
 	// Initialize message queue with configured size
 	messageQueue = make(chan Message, config.MaxQueueSize)
 
-	if err := CreateDirs(config.LinuxPath); err != nil {
-		fmt.Printf("Warning: directory setup issue: %v\n", err)
+	// LinuxPath is empty when the socket path was user-overridden — no system
+	// directory (or tendrl group) is needed in that case.
+	if config.LinuxPath != "" {
+		if err := CreateDirs(config.LinuxPath); err != nil {
+			fmt.Printf("Warning: directory setup issue: %v\n", err)
+		}
 	}
 
 	client = &http.Client{
@@ -474,6 +510,9 @@ func main() {
 			case <-ctx.Done():
 				// Wait for in-flight connections to finish
 				wg.Wait()
+				fmt.Printf("Session totals: received=%d parse_errors=%d forwarded=%d failed=%d\n",
+					atomic.LoadUint64(&statReceived), atomic.LoadUint64(&statParseErrs),
+					atomic.LoadUint64(&statForwarded), atomic.LoadUint64(&statFailed))
 				return
 			default:
 				fmt.Printf("[main] Accept error: %v\n", err)
@@ -559,9 +598,18 @@ func sendSingleMessage(msg Message) interface{} {
 
 	resp, err := client.Do(req)
 	if err != nil {
+		atomic.AddUint64(&statFailed, 1)
+		fmt.Printf("Failed to send %s message: %v\n", msg.MsgType, err)
 		return map[string]string{"error": err.Error()}
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		atomic.AddUint64(&statFailed, 1)
+		fmt.Printf("Failed to send %s message, status: %d\n", msg.MsgType, resp.StatusCode)
+	} else {
+		atomic.AddUint64(&statForwarded, 1)
+	}
 
 	var result interface{}
 	json.NewDecoder(io.LimitReader(resp.Body, maxResponseBody)).Decode(&result)
