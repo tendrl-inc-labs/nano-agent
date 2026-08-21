@@ -2,9 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, cli]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, cli]
 
 permissions:
   contents: write
@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version-file: go.mod
 
       - name: Run tests
         run: go test -v ./...
