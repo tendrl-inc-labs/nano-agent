@@ -2,9 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, cli]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, cli]
 
 permissions:
   contents: write
