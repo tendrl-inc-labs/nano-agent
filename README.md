@@ -101,7 +101,7 @@ mkdir "C:\ProgramData\tendrl"
 
 ### Manual Installation (From Source)
 
-If you prefer to build from source, you'll need Go 1.23+ installed:
+If you prefer to build from source, you'll need Go 1.26+ installed:
 
 ```bash
 git clone https://github.com/tendrl-inc-labs/nano-agent.git
