@@ -1,0 +1,116 @@
+# Release: cross-compile every target and publish to the public tools bucket.
+#
+# Same shape as tendrl-dev-mcp's release.yml and tendrl-surface's
+# release-scanner.yml: pure-Go cross-compilation (CGO_ENABLED=0), a
+# manifest.json in the layout Contact's app_service/api/public_tools.go reads,
+# and an OIDC s3 sync — no stored AWS keys, no GitHub release assets (the docs
+# link the bucket-backed URLs at /api/public/tools/nano-agent/..., not GitHub).
+#
+# Requires (org/repo config): secrets.PUBLIC_TOOLS_UPLOAD_ROLE,
+# vars.AWS_REGION, vars.PUBLIC_TOOLS_BUCKET — and the bucket policy's
+# public_tools_writer_subjects to include repo:tendrl-inc-labs/nano-agent:*.
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # OIDC role for the bucket upload
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      # Gate: never publish a broken build.
+      - name: Vet + test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Cross-compile
+        run: |
+          mkdir -p dist
+          build() {
+            echo "building $1/$2 -> $3"
+            GOOS="$1" GOARCH="$2" CGO_ENABLED=0 \
+              go build -trimpath -ldflags "-s -w" -o "dist/$3" .
+          }
+          build linux   amd64 tendrl-agent-linux-amd64
+          build linux   arm64 tendrl-agent-linux-arm64
+          build darwin  amd64 tendrl-agent-darwin-amd64
+          build darwin  arm64 tendrl-agent-darwin-arm64
+          build windows amd64 tendrl-agent-windows-amd64.exe
+          ( cd dist && sha256sum * > SHA256SUMS.txt )
+          ls -la dist
+
+      # Keep the manifest shape in sync with toolManifest in Contact's
+      # app_service/api/public_tools.go.
+      - name: Build download manifest
+        env:
+          BUILD_TIMESTAMP: ${{ github.event.head_commit.timestamp }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+          else
+            VERSION="latest"
+          fi
+          echo "TOOL_VERSION=${VERSION}" >> "$GITHUB_ENV"
+          python3 - "$VERSION" <<'PY'
+          import hashlib, json, os, sys
+          version = sys.argv[1]
+          files = []
+          for name in sorted(os.listdir("dist")):
+              if name == "SHA256SUMS.txt":
+                  continue
+              path = os.path.join("dist", name)
+              # tendrl-agent-<os>-<arch>[.exe] -> "<os>-<arch>"
+              platform = name.removeprefix("tendrl-agent-").removesuffix(".exe")
+              with open(path, "rb") as fh:
+                  digest = hashlib.sha256(fh.read()).hexdigest()
+              files.append({
+                  "platform": platform,
+                  "filename": name,
+                  "sha256": digest,
+                  "size": os.path.getsize(path),
+              })
+          manifest = {
+              "version": version,
+              "released": os.environ.get("BUILD_TIMESTAMP", ""),
+              "files": files,
+          }
+          with open("dist/manifest.json", "w") as fh:
+              json.dump(manifest, fh, indent=2)
+          print(json.dumps(manifest, indent=2))
+          PY
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.PUBLIC_TOOLS_UPLOAD_ROLE }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Upload to public tools bucket
+        run: |
+          set -euo pipefail
+          aws s3 sync dist/ \
+            "s3://${{ vars.PUBLIC_TOOLS_BUCKET }}/nano-agent/${TOOL_VERSION}/" \
+            --delete --no-progress
+          # A tag also refreshes "latest" so the docs' /latest/ links track the
+          # newest immutable release rather than the last main build.
+          if [[ "${TOOL_VERSION}" != "latest" ]]; then
+            aws s3 sync dist/ \
+              "s3://${{ vars.PUBLIC_TOOLS_BUCKET }}/nano-agent/latest/" \
+              --delete --no-progress
+          fi
