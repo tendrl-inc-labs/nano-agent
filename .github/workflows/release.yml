@@ -62,12 +62,19 @@ jobs:
           agent darwin  amd64 tendrl-agent-darwin-amd64
           agent darwin  arm64 tendrl-agent-darwin-arm64
           agent windows amd64 tendrl-agent-windows-amd64.exe
-          # The docs' CLI page installs `tendrl` from the same listing.
-          cli linux   amd64 tendrl-linux-amd64
-          cli linux   arm64 tendrl-linux-arm64
-          cli darwin  amd64 tendrl-darwin-amd64
-          cli darwin  arm64 tendrl-darwin-arm64
-          cli windows amd64 tendrl-windows-amd64.exe
+          # The docs' CLI page installs `tendrl` from the same listing. The CLI
+          # source lives on the cli branch until it merges; build it wherever
+          # cmd/tendrl exists so main runs green today and ships the CLI the
+          # moment the merge lands.
+          if [ -d cmd/tendrl ]; then
+            cli linux   amd64 tendrl-linux-amd64
+            cli linux   arm64 tendrl-linux-arm64
+            cli darwin  amd64 tendrl-darwin-amd64
+            cli darwin  arm64 tendrl-darwin-arm64
+            cli windows amd64 tendrl-windows-amd64.exe
+          else
+            echo "cmd/tendrl not on this ref — agent binaries only"
+          fi
           ( cd dist && sha256sum * > SHA256SUMS.txt )
           ls -la dist
 
@@ -118,12 +125,14 @@ jobs:
           PY
 
       - name: Configure AWS credentials (OIDC)
+        if: ${{ vars.PUBLIC_TOOLS_BUCKET != '' }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ secrets.PUBLIC_TOOLS_UPLOAD_ROLE }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Upload to public tools bucket
+        if: ${{ vars.PUBLIC_TOOLS_BUCKET != '' }}
         run: |
           set -euo pipefail
           aws s3 sync dist/ \
