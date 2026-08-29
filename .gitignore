@@ -7,5 +7,6 @@ tendrl-agent
 tendrl-agent-*
 *.exe
 
-# the CLI binary — the list covered agent/tendrl-agent/*.exe but not this
-tendrl
+# the CLI binary. Anchored with a leading slash: a bare `tendrl` also matches
+# the cmd/tendrl SOURCE directory, which silently hid new files in it.
+/tendrl
