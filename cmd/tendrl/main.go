@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"tendrl/agent/internal/socketclient"
+	"github.com/tendrl-inc-labs/nano-agent/internal/socketclient"
 )
 
 var version = "dev"

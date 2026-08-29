@@ -6,3 +6,6 @@ agent
 tendrl-agent
 tendrl-agent-*
 *.exe
+
+# the CLI binary — the list covered agent/tendrl-agent/*.exe but not this
+tendrl

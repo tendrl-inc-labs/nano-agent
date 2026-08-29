@@ -1,4 +1,4 @@
-module tendrl/agent
+module github.com/tendrl-inc-labs/nano-agent
 
 go 1.27.0
 
