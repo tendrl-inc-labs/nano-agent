@@ -33,7 +33,7 @@ The agent acts as a lightweight, secure conduit, allowing diverse applications t
 ### Socket Location
 
 - Linux/macOS: `/var/lib/tendrl/tendrl_agent.sock`
-- Windows: Named pipe `\\.\pipe\tendrl_agent`
+- Windows: `C:\ProgramData\tendrl\tendrl_agent.sock` (AF_UNIX socket, requires Windows 10 1803+)
 
 ## Message Format
 
@@ -57,13 +57,13 @@ All messages are JSON-encoded. The basic message structure is:
 
 ### Fields
 
-| Field       | Type   | Description                                            | Required |
-|-------------|--------|--------------------------------------------------------|----------|
-| data        | object | Message payload                                        | No       |
-| context     | object | Additional context for the message                     | No       |
-| msg_type    | string | Type of message (see Message Types)                    | Yes      |
-| dest        | string | Destination identifier                                 | No       |
-| timestamp   | string | Message timestamp                                      | No       |
+| Field       | Type             | Description                         | Required |
+| ----------- | ---------------- | ----------------------------------- | -------- |
+| data        | object or string | Message payload (JSON object or string) | No       |
+| context     | object           | Additional context for the message  | No       |
+| msg_type    | string           | Type of message (see Message Types) | Yes      |
+| dest        | string           | Destination identifier              | No       |
+| timestamp   | string           | Message timestamp                   | No       |
 
 ### Context Object
 
@@ -97,7 +97,7 @@ Checks for pending messages from the server.
 
 ### 2. Publish Message (`publish`)
 
-Publishes a message to all subscribers.
+Publishes a message to all subscribers or to a specific destination entity.
 
 **Request:**
 
@@ -115,7 +115,8 @@ Publishes a message to all subscribers.
     "tags": ["user", "registration"],
     "wait": false
   },
-  "msg_type": "publish"
+  "msg_type": "publish",
+  "dest": "optional-entity-name"
 }
 ```
 
@@ -123,6 +124,76 @@ Publishes a message to all subscribers.
 
 - If `wait` is `false`: None (asynchronous)
 - If `wait` is `true`: Response from the server
+
+### 3. Heartbeat (`heartbeat`)
+
+Sends a heartbeat message with system metrics.
+
+**Request:**
+
+```json
+{
+  "data": {
+    "mem_free": 1024.0,
+    "mem_total": 4096.0,
+    "disk_free": 50000.0,
+    "disk_size": 100000.0
+  },
+  "msg_type": "heartbeat"
+}
+```
+
+### 4. State New (`state_new`)
+
+Creates a new state entry for the entity.
+
+**Request:**
+
+```json
+{
+  "data": {
+    "key": "value"
+  },
+  "msg_type": "state_new"
+}
+```
+
+### 5. State Update (`state_update`)
+
+Updates an existing state entry for the entity.
+
+**Request:**
+
+```json
+{
+  "data": {
+    "key": "updated_value"
+  },
+  "msg_type": "state_update"
+}
+```
+
+### 6. State Read (`state_read`)
+
+Reads the entity's current state table.
+
+**Request:**
+
+```json
+{
+  "msg_type": "state_read"
+}
+```
+
+**Response:**
+
+```json
+{
+  "statusTable": {
+    "key": "updated_value"
+  }
+}
+```
 
 ## Error Response
 
@@ -136,6 +207,37 @@ Error responses are JSON objects with the following structure:
 ```
 
 ## Usage Examples
+
+### CLI Client
+
+The `tendrl` binary wraps the socket protocol for shell scripts and manual testing. It ships alongside `tendrl-agent` and does not require an API key.
+
+```bash
+# Verify the agent is listening
+tendrl ping
+
+# Publish data
+tendrl publish -data '{"temperature": 22.5, "unit": "celsius"}' -tags sensor,building-a
+
+# Publish and wait for a server response
+tendrl publish -data '{"temperature": 22.5}' -wait
+
+# Send to a specific entity
+tendrl publish -data '{"command": "reboot"}' -dest control-panel-01
+
+# Poll for incoming messages
+tendrl check -limit 5
+
+# State table operations
+tendrl state new -data '{"firmware": "1.2.0", "mode": "active"}'
+tendrl state update -data '{"mode": "standby"}'
+tendrl state read
+
+# Send a heartbeat
+tendrl heartbeat -data '{"mem_free": 1024.0, "mem_total": 4096.0}'
+```
+
+Use `-data @payload.json` to load JSON from a file. Override the socket path with `-socket` if needed.
 
 ### Connecting to the Socket (Unix/Linux)
 
@@ -170,15 +272,12 @@ sock.close()
 ### Connecting to the Socket (Windows)
 
 ```python
-import win32pipe
-import win32file
+import socket
 import json
 
-pipe = win32file.CreateFile(
-    r'\\.\pipe\tendrl_agent',
-    win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-    0, None, win32file.OPEN_EXISTING, 0, None
-)
+# Requires Windows 10 version 1803 or later for AF_UNIX support
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.connect(r"C:\ProgramData\tendrl\tendrl_agent.sock")
 
 # Send a message with JSON data
 message = {
@@ -192,13 +291,13 @@ message = {
     }
   }
 }
-win32file.WriteFile(pipe, json.dumps(message).encode())
+sock.sendall(json.dumps(message).encode())
 
 # Wait for response
-response = win32file.ReadFile(pipe, 4096)
-print(response[1].decode())
+response = sock.recv(4096)
+print(response.decode())
 
-win32file.CloseHandle(pipe)
+sock.close()
 ```
 
 ## Implementation Notes
@@ -217,27 +316,26 @@ Common errors include:
 
 ## Client Configuration Table
 
-| Configuration Option | Type | Default | Description |
-|---------------------|------|---------|-------------|
-| `ApiKey` | `string` | `""` | Authentication API key |
-| `FlushInterval` | `time.Duration` | `250ms` | Interval for flushing message batches |
-| `BatchSize` | `int` | `10` | Default number of messages per batch |
-| `MinBatchSize` | `int` | `10` | Minimum number of messages per batch |
-| `MaxBatchSize` | `int` | `200` | Maximum number of messages per batch |
-| `ScaleFactor` | `float64` | `0.5` | Queue scaling factor for dynamic batch sizing |
-| `MaxQueueSize` | `int` | `1000` | Maximum message queue size |
-| `TargetCPUPercent` | `float64` | `70.0` | Target CPU usage percentage for dynamic batch sizing |
-| `TargetMemPercent` | `float64` | `80.0` | Target memory usage percentage for dynamic batch sizing |
-| `MinBatchInterval` | `time.Duration` | `100ms` | Minimum time between batch sends |
-| `MaxBatchInterval` | `time.Duration` | `1s` | Maximum time between batch sends |
-| `AppURL` | `string` | `"https://app.tendrl.com/api"` | Default API endpoint |
-| `LinuxPath` | `string` | `"/var/lib/tendrl"` | Base path for agent files |
-| `SocketPath` | `string` | `"/var/lib/tendrl/tendrl_agent.sock"` | Unix socket path |
+| Configuration Option | Type             | Default                                | Description                                            |
+| -------------------- | ---------------- | -------------------------------------- | ------------------------------------------------------ |
+| `ApiKey`             | `string`         | `""`                                   | Authentication API key                                 |
+| `FlushInterval`      | `time.Duration`  | `250ms`                                | Interval for flushing message batches                  |
+| `BatchSize`          | `int`            | `10`                                   | Default number of messages per batch                   |
+| `MinBatchSize`       | `int`            | `10`                                   | Minimum number of messages per batch                   |
+| `MaxBatchSize`       | `int`            | `200`                                  | Maximum number of messages per batch                   |
+| `ScaleFactor`        | `float64`        | `0.5`                                  | Queue scaling factor for dynamic batch sizing          |
+| `MaxQueueSize`       | `int`            | `1000`                                 | Maximum message queue size                             |
+| `TargetCPUPercent`   | `float64`        | `70.0`                                 | Target CPU usage percentage for dynamic batch sizing   |
+| `TargetMemPercent`   | `float64`        | `80.0`                                 | Target memory usage percentage for dynamic batch sizing |
+| `MinBatchInterval`   | `time.Duration`  | `100ms`                                | Minimum time between batch sends                       |
+| `MaxBatchInterval`   | `time.Duration`  | `1s`                                   | Maximum time between batch sends                       |
+| `AppURL`             | `string`         | `"https://app.tendrl.com/api"`         | API endpoint (flag: `-appURL`, env: `TENDRL_APP_URL`)  |
+| `LinuxPath`          | `string`         | `"/var/lib/tendrl"`                    | Base path for agent files                              |
+| `SocketPath`         | `string`         | `"/var/lib/tendrl/tendrl_agent.sock"`  | Unix socket path                                       |
 
 ### Configuration Environment Variables
 
-| Environment Variable | Description |
-|---------------------|-------------|
-| `TENDRL_KEY` | API key for authentication |
-| `TENDRL_APP_URL` | Custom API endpoint |
-| `TENDRL_SOCKET_PATH` | Custom Unix socket path |
+| Environment Variable | Description                |
+| -------------------- | -------------------------- |
+| `TENDRL_KEY`         | API key for authentication |
+| `TENDRL_APP_URL`     | API base URL override      |

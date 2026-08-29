@@ -1,0 +1,12 @@
+.DS_Store
+scripts/
+
+# Build artifacts
+agent
+tendrl-agent
+tendrl-agent-*
+*.exe
+
+# the CLI binary. Anchored with a leading slash: a bare `tendrl` also matches
+# the cmd/tendrl SOURCE directory, which silently hid new files in it.
+/tendrl

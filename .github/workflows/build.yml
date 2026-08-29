@@ -1,0 +1,84 @@
+name: Build
+
+on:
+  push:
+    branches: [main, develop, cli]
+  pull_request:
+    branches: [main, develop, cli]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Build all platforms
+        run: make build-all
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tendrl-agent-binaries
+          path: |
+            tendrl-agent-linux-amd64
+            tendrl-agent-linux-arm64
+            tendrl-agent-windows-amd64.exe
+            tendrl-agent-darwin-amd64
+            tendrl-agent-darwin-arm64
+            tendrl-linux-amd64
+            tendrl-linux-arm64
+            tendrl-windows-amd64.exe
+            tendrl-darwin-amd64
+            tendrl-darwin-arm64
+
+  release:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tendrl-agent-binaries
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          # Check if this tag already exists
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create release
+        if: steps.version.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Release v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            tendrl-agent-linux-amd64
+            tendrl-agent-linux-arm64
+            tendrl-agent-windows-amd64.exe
+            tendrl-agent-darwin-amd64
+            tendrl-agent-darwin-arm64
+            tendrl-linux-amd64
+            tendrl-linux-arm64
+            tendrl-windows-amd64.exe
+            tendrl-darwin-amd64
+            tendrl-darwin-arm64

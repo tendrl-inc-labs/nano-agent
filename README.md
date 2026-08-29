@@ -1,6 +1,6 @@
 # Tendrl Nano Agent
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/tendrl-inc/clients/nano_agent)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/tendrl-inc-labs/nano-agent)
 [![Go Version](https://img.shields.io/badge/go-1.21+-00ADD8.svg)](https://golang.org/doc/devel/release.html)
 [![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
 
@@ -51,6 +51,67 @@ See the [LICENSE](LICENSE.md) file for complete terms and restrictions.
 
 ## Installation
 
+### Quick Start (Recommended)
+
+Download the latest pre-built binary for your platform from the [GitHub releases page](https://github.com/tendrl-inc-labs/nano-agent/releases):
+
+#### Linux (x86_64)
+```bash
+# Download and install
+curl -L -o tendrl-agent https://github.com/tendrl-inc-labs/nano-agent/releases/latest/download/tendrl-agent-linux-amd64
+chmod +x tendrl-agent
+sudo mv tendrl-agent /usr/local/bin/
+
+# Create required directories and permissions
+sudo mkdir -p /var/lib/tendrl
+sudo groupadd tendrl
+sudo chown :tendrl /var/lib/tendrl
+sudo chmod 770 /var/lib/tendrl
+```
+
+#### Linux (ARM64)
+```bash
+curl -L -o tendrl-agent https://github.com/tendrl-inc-labs/nano-agent/releases/latest/download/tendrl-agent-linux-arm64
+chmod +x tendrl-agent
+sudo mv tendrl-agent /usr/local/bin/
+```
+
+#### macOS (Intel)
+```bash
+curl -L -o tendrl-agent https://github.com/tendrl-inc-labs/nano-agent/releases/latest/download/tendrl-agent-darwin-amd64
+chmod +x tendrl-agent
+sudo mv tendrl-agent /usr/local/bin/
+```
+
+#### macOS (Apple Silicon)
+```bash
+curl -L -o tendrl-agent https://github.com/tendrl-inc-labs/nano-agent/releases/latest/download/tendrl-agent-darwin-arm64
+chmod +x tendrl-agent
+sudo mv tendrl-agent /usr/local/bin/
+```
+
+#### Windows (x86_64)
+```powershell
+# Download using PowerShell
+Invoke-WebRequest -Uri "https://github.com/tendrl-inc-labs/nano-agent/releases/latest/download/tendrl-agent-windows-amd64.exe" -OutFile "tendrl-agent.exe"
+
+# Create required directories
+mkdir "C:\ProgramData\tendrl"
+```
+
+### Manual Installation (From Source)
+
+If you prefer to build from source, you'll need Go 1.26+ installed:
+
+```bash
+git clone https://github.com/tendrl-inc-labs/nano-agent.git
+cd nano_agent
+go build -o tendrl-agent .
+go build -o tendrl ./cmd/tendrl
+```
+
+Pre-built `tendrl` client binaries are published on the [releases page](https://github.com/tendrl-inc-labs/nano-agent/releases) alongside `tendrl-agent` (e.g. `tendrl-linux-amd64`, `tendrl-darwin-arm64`).
+
 ### Windows (10 1803+)
 
 ```bash
@@ -78,32 +139,35 @@ sudo chmod 770 /var/lib/tendrl
 ```bash
 ./tendrl-agent \
   -apiKey=YOUR_API_KEY \
+  -appURL=https://app.tendrl.com/api \
   -minBatchSize=10 \
-  -maxBatchSize=500 \
+  -maxBatchSize=200 \
   -targetCPU=70.0 \
   -targetMem=80.0 \
   -flushInterval=250ms \
-  -maxQueue=10000
+  -maxQueue=1000
 ```
 
 ### Environment Variables
 
 ```bash
-export TENDRL_API_KEY=your_api_key
+export TENDRL_KEY=your_api_key
+export TENDRL_APP_URL=https://app.tendrl.com/api  # optional
 ./tendrl-agent
 ```
 
 ### Configuration Options
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| apiKey | string | - | API key for authentication |
-| minBatchSize | int | 10 | Minimum messages per batch |
-| maxBatchSize | int | 500 | Maximum messages per batch |
-| targetCPU | float | 70.0 | Target CPU usage percentage |
-| targetMem | float | 80.0 | Target memory usage percentage |
-| flushInterval | duration | 250ms | Maximum time between flushes |
-| maxQueue | int | 10000 | Maximum messages in queue |
+| Option         | Type     | Default                        | Description                       |
+| -------------- | -------- | ------------------------------ | --------------------------------- |
+| apiKey         | string   | -                              | API key (env: `TENDRL_KEY`)       |
+| appURL         | string   | `https://app.tendrl.com/api`   | API base URL (env: `TENDRL_APP_URL`) |
+| minBatchSize   | int      | 10                             | Minimum messages per batch        |
+| maxBatchSize   | int      | 200                            | Maximum messages per batch        |
+| targetCPU      | float    | 70.0                           | Target CPU usage percentage       |
+| targetMem      | float    | 80.0                           | Target memory usage percentage    |
+| flushInterval  | duration | 250ms                          | Maximum time between flushes      |
+| maxQueue       | int      | 1000                           | Maximum messages in queue         |
 
 ## Message Format
 
@@ -114,38 +178,111 @@ For complete protocol specification and detailed documentation, see [`protocol.m
 ```json
 {
   "msg_type": "publish",
-  "data": "your message data",
-  "tags": ["tag1", "tag2"],
+  "data": {
+    "key": "value"
+  },
   "context": {
+    "tags": ["tag1", "tag2"],
     "wait": false,
     "entity": "optional-entity-id"
-  }
+  },
+  "dest": "optional-destination-entity"
 }
 ```
 
+The `data` field accepts either a JSON object or a string.
+
 ### Message Types
 
-- `publish`: Standard message publishing
+- `publish`: Standard message publishing (with optional destination)
 - `msg_check`: Check for incoming messages
-- `dest_publish`: Publish to specific destination
+- `heartbeat`: Send system metrics (mem_free, mem_total, disk_free, disk_size)
+- `state_new`: Create a new state entry for the entity
+- `state_update`: Update an existing state entry
+- `state_read`: Read the entity's current state table
+
+## CLI Client (`tendrl`)
+
+The repo ships two binaries:
+
+| Binary | Role |
+|--------|------|
+| `tendrl-agent` | Long-running daemon that owns the API key and listens on the Unix socket |
+| `tendrl` | Thin socket client for debugging, scripting, and manual tests |
+
+The `tendrl` client does not need an API key. It talks to a running agent over the local socket only.
+
+### Install
+
+Download the matching `tendrl-*` binary from the [releases page](https://github.com/tendrl-inc-labs/nano-agent/releases), or build from source:
+
+```bash
+go build -o tendrl ./cmd/tendrl
+```
+
+### Commands
+
+```bash
+tendrl ping                                          # verify socket is reachable
+tendrl publish -data '{"temperature": 22.5}' -tags sensor
+tendrl publish -data '{"status": "ok"}' -wait        # wait for server response
+tendrl check -limit 10                               # poll for incoming messages
+tendrl heartbeat -data '{"mem_free": 1024}'          # send heartbeat payload
+tendrl state read                                    # read entity state table
+tendrl state new -data '{"firmware": "1.2.0"}'
+tendrl state update -data '{"mode": "standby"}'
+```
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-socket` | platform default (see [protocol.md](protocol.md)) | Override agent socket path |
+| `-version` | — | Print version and exit |
+
+Command-specific flags:
+
+| Command | Flags |
+|---------|-------|
+| `publish` | `-data` (JSON or `@file.json`), `-tags` (comma-separated), `-dest`, `-entity`, `-wait` |
+| `check` | `-limit` (default 1) |
+| `heartbeat` | `-data` (JSON or `@file.json`; defaults to `{}`) |
+| `state new`, `state update` | `-data` (required), `-wait` |
+
+JSON responses are pretty-printed to stdout. Agent errors are printed to stderr and the process exits with code 1.
+
+For the underlying socket protocol, see [`protocol.md`](protocol.md).
 
 ## Usage Examples
 
-### All Platforms (AF_UNIX Socket)
+### Using the `tendrl` CLI (Recommended)
+
+```bash
+# Publish sensor data
+tendrl publish -data '{"temperature": 22.5}' -tags sensor
+
+# Wait for server acknowledgment
+tendrl publish -data '{"status": "ok"}' -wait
+
+# Check for incoming commands
+tendrl check -limit 5
+```
+
+### Raw Socket (Any Language)
 
 1. Send a simple message:
 
 **Unix/Linux/macOS:**
 
 ```bash
-echo '{"msg_type": "publish", "data": "test", "tags": ["test"]}' | \
+echo '{"msg_type": "publish", "data": {"temperature": 22.5}, "context": {"tags": ["sensor"]}}' | \
   nc -U /var/lib/tendrl/tendrl_agent.sock
 ```
 
 **Windows:**
 
 ```powershell
-echo '{"msg_type": "publish", "data": "test", "tags": ["test"]}' | `
+echo '{"msg_type": "publish", "data": {"temperature": 22.5}, "context": {"tags": ["sensor"]}}' | `
   nc -U "C:\ProgramData\tendrl\tendrl_agent.sock"
 ```
 
@@ -154,14 +291,14 @@ echo '{"msg_type": "publish", "data": "test", "tags": ["test"]}' | `
 **Unix/Linux/macOS:**
 
 ```bash
-echo '{"msg_type": "publish", "data": "test", "context": {"wait": true}}' | \
+echo '{"msg_type": "publish", "data": {"status": "ok"}, "context": {"wait": true}}' | \
   nc -U /var/lib/tendrl/tendrl_agent.sock
 ```
 
 **Windows:**
 
 ```powershell
-echo '{"msg_type": "publish", "data": "test", "context": {"wait": true}}' | `
+echo '{"msg_type": "publish", "data": {"status": "ok"}, "context": {"wait": true}}' | `
   nc -U "C:\ProgramData\tendrl\tendrl_agent.sock"
 ```
 
@@ -190,7 +327,7 @@ After=network.target
 
 [Service]
 Type=simple
-Environment=TENDRL_API_KEY=your_api_key
+Environment=TENDRL_KEY=your_api_key
 ExecStart=/usr/local/bin/tendrl-agent
 Restart=always
 User=tendrl
@@ -205,7 +342,7 @@ WantedBy=multi-user.target
 ```powershell
 # Install as Windows service using NSSM or similar
 nssm install TendrlAgent "C:\Program Files\Tendrl\tendrl-agent.exe"
-nssm set TendrlAgent Environment "TENDRL_API_KEY=your_api_key"
+nssm set TendrlAgent Environment "TENDRL_KEY=your_api_key"
 nssm start TendrlAgent
 ```
 
