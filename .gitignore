@@ -10,3 +10,9 @@ tendrl-agent-*
 # the CLI binary. Anchored with a leading slash: a bare `tendrl` also matches
 # the cmd/tendrl SOURCE directory, which silently hid new files in it.
 /tendrl
+
+# Secrets / local environment
+.env
+.env.*
+!.env.example
+*.pem
