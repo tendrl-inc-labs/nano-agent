@@ -1,6 +1,6 @@
 module github.com/tendrl-inc-labs/nano-agent
 
-go 1.27.0
+go 1.27.2
 
 require (
 	github.com/shirou/gopsutil v3.21.11+incompatible
